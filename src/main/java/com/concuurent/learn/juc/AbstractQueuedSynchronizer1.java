@@ -615,8 +615,8 @@ private boolean doAcquireNanos(int arg, long nanosTimeout)
 }
 
 /**
- * Acquires in shared uninterruptible mode.
- * @param arg the acquire argument
+ * 在如代码中，读锁的lock方法调用了AQS的acquireShared方法，
+ * 在其内部调用了ReentrantReadWriteLock中的sync重写的tryAcquireShared方法，
  */
 private void doAcquireShared(int arg) {
     final Node node = addWaiter(Node.SHARED);
@@ -956,7 +956,9 @@ public final boolean tryAcquireNanos(int arg, long nanosTimeout)
 //如果CAS失败则返回false。比如继承自AQS实现的独占锁在实现tryRelease时，
 //在内部要使用CAS算法把当前state的值从1修改为0，并设置当前锁的持有者为null，然后返回true，如果CAS失败则返回false。
 public final boolean release(int arg) {
+	//调用ReentrantReadWriteLock方法中sync的tryRelease方法
     if (tryRelease(arg)) {
+    	//激活阻塞对列里面的一个线程
         Node h = head;
         if (h != null && h.waitStatus != 0)
             unparkSuccessor(h);
@@ -982,7 +984,9 @@ public final boolean release(int arg) {
 //失败则将当前线程封装为类型为Node.SHARED的Node节点后插入到AQS阻塞队列的尾部，
 //并使用LockSupport.park(this)方法挂起自己。
 public final void acquireShared(int arg) {
+	//调用ReentrantLockReadWriteLock中sync的tryAcquireShare方法
     if (tryAcquireShared(arg) < 0)
+    	//调用AQS中的doAcquireShared方法
         doAcquireShared(arg);
 }
 
@@ -1173,13 +1177,8 @@ public final boolean isQueued(Thread thread) {
 }
 
 /**
- * Returns {@code true} if the apparent first queued thread, if one
- * exists, is waiting in exclusive mode.  If this method returns
- * {@code true}, and the current thread is attempting to acquire in
- * shared mode (that is, this method is invoked from {@link
- * #tryAcquireShared}) then it is guaranteed that the current thread
- * is not the first queued thread.  Used only as a heuristic in
- * ReentrantReadWriteLock.
+ * 如果readerShouldBlock返回true则说明有线程正在获取写锁，
+ * 所以执行ReentrantReadWriterLock中的tryAcquireShared中的代码8。
  */
 final boolean apparentlyFirstQueuedIsExclusive() {
     Node h, s;

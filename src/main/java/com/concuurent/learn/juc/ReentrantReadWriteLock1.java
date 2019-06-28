@@ -89,7 +89,7 @@ public class ReentrantReadWriteLock1
 		/** 排它锁(写锁)掩码 二进制 15个1 */
         static final int EXCLUSIVE_MASK = (1 << SHARED_SHIFT) - 1;
 
-        /** 返回读锁线程数  */
+        /** 返回读锁线程个数  */
         static int sharedCount(int c)    { return c >>> SHARED_SHIFT; }
         /** 返回写锁可重入个数  */
         static int exclusiveCount(int c) { return c & EXCLUSIVE_MASK; }
@@ -155,18 +155,21 @@ public class ReentrantReadWriteLock1
          */
         abstract boolean writerShouldBlock();
 
-        /*
-         * Note that tryRelease and tryAcquire can be called by
-         * Conditions. So it is possible that their arguments contain
-         * both read and write holds that are all released during a
-         * condition wait and re-established in tryAcquire.
+        /**
+          * <p>tryRelease首先通过isHeldExclusively判断是否当前线程是该写锁的持有者，如果不是则抛出异常，否则执行代码(7)，
+          * <p> 这说明当前线程持有写锁，持有写锁说明状态值的高16位为0，所以这里nextc值是当线程写锁的剩余可重入次数。
+          * <p> 代码（8)判断当前可重入次数是否为0，如果fre巳为true则说明可重入次数为0，所以当前线程会释放写锁，
+          * <p>将当前锁的持有者设为null。如果free为false则简单地更新可重入次数。
          */
-
+        //TODO 
         protected final boolean tryRelease(int releases) {
+        	//6.看是否是写锁拥有者调用的unlock
             if (!isHeldExclusively())
                 throw new IllegalMonitorStateException();
+//            7.获取可重入值
             int nextc = getState() - releases;
             boolean free = exclusiveCount(nextc) == 0;
+            //8.如果写锁可重入值为0则释放锁，否则只是简单的更新状态值
             if (free)
                 setExclusiveOwnerThread(null);
             setState(nextc);
@@ -188,7 +191,7 @@ public class ReentrantReadWriteLock1
             Thread current = Thread.currentThread();
             int c = getState();
             int w = exclusiveCount(c);
-            //1.c != 0说明读锁或者写锁已经被某个线程获取
+            //1. c != 0说明读锁或者写锁已经被某个线程获取
             if (c != 0) {
                 //2 w = 0说明已经有线程获取了读锁 ||  w!=0并且当前线程不是线程拥有者则返回
                 if (w == 0 || current != getExclusiveOwnerThread())
@@ -235,6 +238,14 @@ public class ReentrantReadWriteLock1
                 }
                 --rh.count;
             }
+//            循环直到自己的读计数-1，CAS更新成功
+//            在无限循环里面，首先获取当前AQS状态值并将其保存到变量c，
+//            然后变量c被减去一个读计数单位后使用CAS操作更新AQS状态值，
+//            如果更新成功则查看当前AQS状态值是否为0，为0则说明当前己经没有读线程占用读锁，
+//            则tryReleaseShared返回true。然后会调用doReleaseShared方法释放一个由于获取写锁而被阻塞的线程，
+//            如果当前AQS状态值不为0，则说明当前还有其他线程持有了读锁，
+//            所以tryReleaseShared返回false。
+//            如果tryReleaseShared中的CAS更新AQS状态值失败，则自旋重试直到成功。
             for (;;) {
                 int c = getState();
                 int nextc = c - SHARED_UNIT;
@@ -252,36 +263,28 @@ public class ReentrantReadWriteLock1
         }
 
         protected final int tryAcquireShared(int unused) {
-            /*
-             * Walkthrough:
-             * 1. If write lock held by another thread, fail.
-             * 2. Otherwise, this thread is eligible for
-             *    lock wrt state, so ask if it should block
-             *    because of queue policy. If not, try
-             *    to grant by CASing state and updating count.
-             *    Note that step does not check for reentrant
-             *    acquires, which is postponed to full version
-             *    to avoid having to check hold count in
-             *    the more typical non-reentrant case.
-             * 3. If step 2 fails either because thread
-             *    apparently not eligible or CAS fails or count
-             *    saturated, chain to version with full retry loop.
-             */
+        	//1.获取当前线程的状态值
             Thread current = Thread.currentThread();
             int c = getState();
+            //2.判断是否被写锁占用
             if (exclusiveCount(c) != 0 &&
                 getExclusiveOwnerThread() != current)
                 return -1;
+            //3.获取读锁计数
             int r = sharedCount(c);
+            //4.尝试获取锁，多个读线程只有一个会成功，不成功的进入fullTryAcquireShared()方法进行重试
             if (!readerShouldBlock() &&
                 r < MAX_COUNT &&
                 compareAndSetState(c, c + SHARED_UNIT)) {
+            	//5.第一个线程获取读锁
                 if (r == 0) {
                     firstReader = current;
                     firstReaderHoldCount = 1;
+//               6.如果当前线程是第一个获取读锁的线程
                 } else if (firstReader == current) {
                     firstReaderHoldCount++;
                 } else {
+                	//7.记录最后一个获取读锁的线程或记录其他线程读锁的可重入次数
                     HoldCounter rh = cachedHoldCounter;
                     if (rh == null || rh.tid != getThreadId(current))
                         cachedHoldCounter = rh = readHolds.get();
@@ -291,12 +294,25 @@ public class ReentrantReadWriteLock1
                 }
                 return 1;
             }
+            //8.类似TryAcquireShared但是是自旋获取
             return fullTryAcquireShared(current);
+//            如上代码首先获取了当前AQS的状态值，然后代码2查看是否有其他线程获取到了写锁，
+//            如果是则直接返回-1，而后调用AQS的doAcquireShared方法把当前线程放入AQS阻塞队列。
+//            如果当前要获取读锁的线程己经持有了写锁，则也可以获取读锁。但是需要注意，
+//            当一个线程先获取了写锁，然后获取了读锁处理事情完毕后，要记得把读锁和写锁都释放掉，
+//            不能只释放写锁。否则执行代码（3），得到获取到的读锁的个数，
+//            到这里说明目前没有线程获取到写锁，但是可能有线程持有读锁，然后执行代码（4）。
+//             如果队列里面存在一个元素，则判断第一个元素是不是正在尝试获取写锁，
+//             如果不是，则当前线程判断当前获取读锁的线程是否达到了最大值。
+//             最后执行CAS操作将AQS状态值的高16位值增加1、
+//             代码5、6记录
+//             第一个获取读锁的线程并统计该线程获取读锁的可重入数。
+//             代码7使用cacheHoldCounter记录最后一个获取到读锁的线程和该线程获取读锁的可重入数，
+//             readHolds记录了当前线程获取读锁的可重入数。
         }
 
         /**
-         * Full version of acquire for reads, that handles CAS misses
-         * and reentrant reads not dealt with in tryAcquireShared.
+         * fullTryAcquireShared的代码与tryAcquireShared类似，它们的不同之处在于，前者通过循环自旋获取。
          */
         final int fullTryAcquireShared(Thread current) {
             /*
@@ -528,14 +544,8 @@ public class ReentrantReadWriteLock1
         }
 
         /**
-         * Acquires the read lock.
-         *
-         * <p>Acquires the read lock if the write lock is not held by
-         * another thread and returns immediately.
-         *
-         * <p>If the write lock is held by another thread then
-         * the current thread becomes disabled for thread scheduling
-         * purposes and lies dormant until the read lock has been acquired.
+         * <p> 获取读锁，如果当前没有其他线程持有写锁，则当前线程可以获取读锁，AQS的状态值state的高16位的值增加1，
+         * <span>然后方法返回。否则如果其他一个线程持有写锁，则当前线程会被阻塞
          */
         public void lock() {
             sync.acquireShared(1);
@@ -554,7 +564,7 @@ public class ReentrantReadWriteLock1
 	         * 尝试获取写锁，如果当前没有其他线程有写锁或者读锁，则当前线程获取写锁会成功，
 	         * 然后返回true。如果当前己经有其他线程持有写锁或者读锁则该方法直接返回false,
 	         * 且当前线程并不会被阻塞。如果当前线程已经持有了该写锁则简单增加AQS的态值后直接返回true
-         */
+	     */
         public boolean tryLock() {
             return sync.tryReadLock();
         }
@@ -634,55 +644,9 @@ public class ReentrantReadWriteLock1
         }
       
         /**
-         * Acquires the write lock unless the current thread is
-         * {@linkplain Thread#interrupt interrupted}.
-         *
-         * <p>Acquires the write lock if neither the read nor write lock
-         * are held by another thread
-         * and returns immediately, setting the write lock hold count to
-         * one.
-         *
-         * <p>If the current thread already holds this lock then the
-         * hold count is incremented by one and the method returns
-         * immediately.
-         *
-         * <p>If the lock is held by another thread then the current
-         * thread becomes disabled for thread scheduling purposes and
-         * lies dormant until one of two things happens:
-         *
-         * <ul>
-         *
-         * <li>The write lock is acquired by the current thread; or
-         *
-         * <li>Some other thread {@linkplain Thread#interrupt interrupts}
-         * the current thread.
-         *
-         * </ul>
-         *
-         * <p>If the write lock is acquired by the current thread then the
-         * lock hold count is set to one.
-         *
-         * <p>If the current thread:
-         *
-         * <ul>
-         *
-         * <li>has its interrupted status set on entry to this method;
-         * or
-         *
-         * <li>is {@linkplain Thread#interrupt interrupted} while
-         * acquiring the write lock,
-         *
-         * </ul>
-         *
-         * then {@link InterruptedException} is thrown and the current
-         * thread's interrupted status is cleared.
-         *
-         * <p>In this implementation, as this method is an explicit
-         * interruption point, preference is given to responding to
-         * the interrupt over normal or reentrant acquisition of the
-         * lock.
-         *
-         * @throws InterruptedException if the current thread is interrupted
+                  *类似于lock()方法，它的不同之处在于，它会对中断进行响应，
+	          * 也就是当其线程调用了该线程的interrupt()方法中断了当前线程，
+	          * 当前线程会抛出异常InterruptedException异常。
          */
         public void lockInterruptibly() throws InterruptedException {
             sync.acquireInterruptibly(1);
@@ -691,90 +655,17 @@ public class ReentrantReadWriteLock1
         /**
 	         * 尝试获取写锁，如果当前没有其他线程有写锁或者读锁，则当前线程获取写锁会成功，
 	         * 然后返回true。如果当前己经有其他线程持有写锁或者读锁则该方法直接返回false,
-	         * 且当前线程并不会被阻塞。如果当前线程已经持有了该写锁则简单增加AQS的态值后直接返回true
+	         * 且当前线程并不会被阻塞。如果当前线程已经持有了该写锁则简单增加AQS的状态值高16位后直接返回true
 	     */
         public boolean tryLock( ) {
             return sync.tryWriteLock();
         }
 
         /**
-         * Acquires the write lock if it is not held by another thread
-         * within the given waiting time and the current thread has
-         * not been {@linkplain Thread#interrupt interrupted}.
          *
-         * <p>Acquires the write lock if neither the read nor write lock
-         * are held by another thread
-         * and returns immediately with the value {@code true},
-         * setting the write lock hold count to one. If this lock has been
-         * set to use a fair ordering policy then an available lock
-         * <em>will not</em> be acquired if any other threads are
-         * waiting for the write lock. This is in contrast to the {@link
-         * #tryLock()} method. If you want a timed {@code tryLock}
-         * that does permit barging on a fair lock then combine the
-         * timed and un-timed forms together:
-         *
-         *  <pre> {@code
-         * if (lock.tryLock() ||
-         *     lock.tryLock(timeout, unit)) {
-         *   ...
-         * }}</pre>
-         *
-         * <p>If the current thread already holds this lock then the
-         * hold count is incremented by one and the method returns
-         * {@code true}.
-         *
-         * <p>If the lock is held by another thread then the current
-         * thread becomes disabled for thread scheduling purposes and
-         * lies dormant until one of three things happens:
-         *
-         * <ul>
-         *
-         * <li>The write lock is acquired by the current thread; or
-         *
-         * <li>Some other thread {@linkplain Thread#interrupt interrupts}
-         * the current thread; or
-         *
-         * <li>The specified waiting time elapses
-         *
-         * </ul>
-         *
-         * <p>If the write lock is acquired then the value {@code true} is
-         * returned and the write lock hold count is set to one.
-         *
-         * <p>If the current thread:
-         *
-         * <ul>
-         *
-         * <li>has its interrupted status set on entry to this method;
-         * or
-         *
-         * <li>is {@linkplain Thread#interrupt interrupted} while
-         * acquiring the write lock,
-         *
-         * </ul>
-         *
-         * then {@link InterruptedException} is thrown and the current
-         * thread's interrupted status is cleared.
-         *
-         * <p>If the specified waiting time elapses then the value
-         * {@code false} is returned.  If the time is less than or
-         * equal to zero, the method will not wait at all.
-         *
-         * <p>In this implementation, as this method is an explicit
-         * interruption point, preference is given to responding to
-         * the interrupt over normal or reentrant acquisition of the
-         * lock, and over reporting the elapse of the waiting time.
-         *
-         * @param timeout the time to wait for the write lock
-         * @param unit the time unit of the timeout argument
-         *
-         * @return {@code true} if the lock was free and was acquired
-         * by the current thread, or the write lock was already held by the
-         * current thread; and {@code false} if the waiting time
-         * elapsed before the lock could be acquired.
-         *
-         * @throws InterruptedException if the current thread is interrupted
-         * @throws NullPointerException if the time unit is null
+                 * 与tryAcquire()的不同之处在于，多了超时时间参数，如果尝试获取读锁失败则会把当前线程挂起指定时间，
+                 * 待超时时间到后当前线程被激活，如果还是没有获取到读锁则返回false。另外，该方法会对中断进行响应，
+                 * 也就是当其他线程调用了该线程的interrupt()方法中断了当前线程时，当前线程抛出InterruptedException异常。
          */
         public boolean tryLock(long timeout, TimeUnit unit)
                 throws InterruptedException {
