@@ -1510,8 +1510,10 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
      */
     void ensurePrestart() {
         int wc = workerCountOf(ctl.get());
+        //增加核心线程数
         if (wc < corePoolSize)
             addWorker(null, true);
+        //如果初始化corePoolSize==0，则也添加一个线程
         else if (wc == 0)
             addWorker(null, false);
     }

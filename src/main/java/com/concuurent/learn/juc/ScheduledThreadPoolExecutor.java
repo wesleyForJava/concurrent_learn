@@ -9,12 +9,10 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.Future;
-import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.RejectedExecutionHandler;
 import java.util.concurrent.RunnableScheduledFuture;
@@ -137,11 +135,16 @@ public class ScheduledThreadPoolExecutor
 
         /**
          * Creates a one-shot action with given nanoTime-based trigger time.
+                 * 然后在ScheduledFutureTask构造函数内部设置time上面说的绝对时间。
+	         * 需要注意，这里period的为，这说明当前任务为一次性的任务，
+	         * 不是定时反复执行任务。其中long getDelay(TimeUnitunit）
+	         * 方法的代码如下（该方法用来计算当前任务还有多少时间就过期了）。
          */
         ScheduledFutureTask(Runnable r, V result, long ns) {
+        	//调用父类的FutureTask的构造函数
             super(r, result);
             this.time = ns;
-            this.period = 0;
+            this.period = 0;//period为0说明为一次性任务
             this.sequenceNumber = sequencer.getAndIncrement();
         }
 
@@ -164,11 +167,21 @@ public class ScheduledThreadPoolExecutor
             this.period = 0;
             this.sequenceNumber = sequencer.getAndIncrement();
         }
-
+        
+        /**
+          * <p>其中long getDelay(TimeUnit unit)方法的代码如下（该方法用来计算当前任务还有多少时间就过期了）。
+         */
         public long getDelay(TimeUnit unit) {
+//        	 元素过期算法，装饰后时间-当前时间，是即将过期剩余时间
             return unit.convert(time - now(), NANOSECONDS);
         }
 
+        /**
+         * compareTo的作用是加入元素到延迟队列后，<br>
+	         * 在内部建立或者调整堆时会使用该元素的compareTo方法与队列里面其他元素进行比较，<br>
+	         * 让最快要过期的元素放到队首。所以无论什么时候向队列里添加元素，<br>
+	         * 队首的元素都是最快要过期的元素。
+         */
         public int compareTo(Delayed other) {
             if (other == this) // compare zero if same object
                 return 0;
@@ -190,7 +203,8 @@ public class ScheduledThreadPoolExecutor
 
         /**
          * Returns {@code true} if this is a periodic (not a one-shot) action.
-         *
+         * <p>内部是通过period的值来判断的，
+         * <p>由于转换任务在创ScheduledFutureTask时传递的period的值为0，所以这里isPeriodic返回false。
          * @return {@code true} if periodic
          */
         public boolean isPeriodic() {
@@ -199,12 +213,15 @@ public class ScheduledThreadPoolExecutor
 
         /**
          * Sets the next time to run for a periodic task.
+         * 这里p<O说明当前任务为fixed-delay类型任务。
+         * 然后设置time为当前时间加上-p的时间，
+         * 也就是延迟-p时间后再次执行。
          */
         private void setNextRunTime() {
             long p = period;
-            if (p > 0)
+            if (p > 0) //fix-rate类型任务
                 time += p;
-            else
+            else  //fix-delay 类型任务
                 time = triggerTime(-p);
         }
 
@@ -217,24 +234,48 @@ public class ScheduledThreadPoolExecutor
 
         /**
          * Overrides FutureTask version so as to reset/requeue if periodic.
+         *  <p> 我们来看线程池里面的线程如何获取并执行任务。在前面讲解ThreadPooIExecutor时我说过，
+         *  <p>具体执行任务的线程是Worker线程，Worker线程调用具体任务的run方法来执行。
+         *  <p>由于这里的务是ScheduledFutureTask，所以我们下面看看ScheduledFutureTask的run方法。
          */
         public void run() {
+        	//8.是否执行一次 isPeriodic的作用是判断当前任务是一次性任务还是可重复执行的任务，
             boolean periodic = isPeriodic();
+            //9.取消任务 判断当前任务是否应该被取消
             if (!canRunInCurrentRunState(periodic))
                 cancel(false);
+            //10.只执行一次调用scheduled方法时候 
+            //由于periodic的值为false，所以执行代码(10）调用父类FutureTask的run方法具体执行任务。FutureTask的run方法的代码如下。
             else if (!periodic)
                 ScheduledFutureTask.super.run();
+            //11.定时执行
+            //如果任务是可重复执行的，则不会执行代码（1 0）而是执行代码（11  ）
             else if (ScheduledFutureTask.super.runAndReset()) {
+            	//11.1 设置time=time+period
                 setNextRunTime();
+                //11.2 重新加入该任务到delay队列
                 reExecutePeriodic(outerTask);
             }
+            /*
+             * 总结：本节介绍的fixed-delay类型的任务的执行原理为，
+             * 当添加一个任务到延迟队列后，等待initialDelay时间，
+             * 任务就会过期，过期的任务就会被从队列移除，并执行。
+             * 执行完毕后，会重新设置任务的延迟时间，
+             * 然后再把任务放入延迟队列，循环往复。需要注意的是，
+             * 如果一个任务在执行中抛出了异常，那么这个任务就结束了，
+             * 但是不影响其他任务的执行。
+             */
         }
     }
 
     /**
      * Returns true if can run a task given current run state
      * and run-after-shutdown parameters.
-     *
+     * <p>这里传递的periodic的值为false，
+     * <p>所以isRunningOrShutdown的参数为executeExistingDelayedTasksAerShutdown。
+     * <p>executeExistingDelayedTasksAfterShutdown默认为true，
+     * <p>表示当其他线程调用了shutdown命令关闭了线程池后，当前任务还是要执行，
+     * <p>否则如果为false，则当前任务要被取消。
      * @param periodic true if this task periodic, false if delayed
      */
     boolean canRunInCurrentRunState(boolean periodic) {
@@ -251,19 +292,30 @@ public class ScheduledThreadPoolExecutor
      * shouldn't be run yet.)  If the pool is shut down while the task
      * is being added, cancel and remove it if required by state and
      * run-after-shutdown parameters.
-     *
+	 * <ul><li>代码（4）首先判断当前线程池是否己经关闭了如果已经关闭则执行线程池的拒绝策略，
+	 * <li>否则执行代码（5）将任务添加到延迟队列。添加完毕后还要重新检查线程池是否被关闭了，
+	 * <li>如果已经关闭则从延迟队列里面删刚才添加的任务，
+	 * <li>但是此时有可能线程池中的线程己经从任务队列里面移除了该任务，
+	 * <li>也就是该任务己经在执行了，所以还需要调用任务的cancle方法取消任务。
+	 * <li>v.如果代码（6）判断结果为false，则会执行代码（7）
+     * <li>确保至少有一个线程在处理任务即使核心线程数corePoolSize被设置为0。
+     * <li>ensurePrestart的代码如下。
      * @param task the task
      */
     private void delayedExecute(RunnableScheduledFuture<?> task) {
+    	//4.如果线程池关闭，则执行线程池拒绝策略
         if (isShutdown())
             reject(task);
         else {
+        	//5.添加任务到延迟队列
             super.getQueue().add(task);
+            //6.在此检查线程池状态
             if (isShutdown() &&
                 !canRunInCurrentRunState(task.isPeriodic()) &&
                 remove(task))
                 task.cancel(false);
             else
+            	//7.确保一个线程在处理任务
                 ensurePrestart();
         }
     }
@@ -462,14 +514,17 @@ public class ScheduledThreadPoolExecutor
     public ScheduledFuture<?> schedule(Runnable command,
                                        long delay,
                                        TimeUnit unit) {
-    	//1参数校验
+    	//1参数校验 如果command 或者 unit为空 则抛出异常
         if (command == null || unit == null)
             throw new NullPointerException();
-        //2.任务转换
+        //2.任务转换 装饰任务 提交的command任务转换为ScheduledFutureTask。
+        //ScheduledFutureTask是具体放入延迟队列里面的东西。由于是延迟任务，
+        //所以ScheduledFutureTask实现了longgetDelay(TimeUnitunit）和intcompareTo(Delayedother）方法。
+        //triggerTime方法将延迟时间转换为绝对时间，也就是把当前时间的纳秒数加上延迟的纳秒数后的long型值。
         RunnableScheduledFuture<?> t = decorateTask(command,
             new ScheduledFutureTask<Void>(command, null,
                                           triggerTime(delay, unit)));
-        //3.添加任务延迟队列
+        //3.添加任务延迟队列  将任务添加到延迟队列，delayedExecute的代码如下
         delayedExecute(t);
         return t;
     }
@@ -494,15 +549,23 @@ public class ScheduledThreadPoolExecutor
      * @throws RejectedExecutionException {@inheritDoc}
      * @throws NullPointerException       {@inheritDoc}
      * @throws IllegalArgumentException   {@inheritDoc}
+     * 该方法相对起始时间点以固定频率调用指定的任务（fixed-rate任务）。
+     * 当把任务提交到线程池并延迟initialDelay间（时间单位为unit）后开始执行任务command。
+     * 然后从initialDelay+period时间点再次执行而后在initialDelay+2*period时间点再次执行，
+     * 循环往复，直到抛出异常或者调用了任务的cancel方法取消了任务，或者关闭了线程池。
+     * scheduleAtFixedRate的原理与scheduleWithFixedDelay类似，下面我们讲下它们之间的不同点
+     * scheduleAtFixedRate代码如下所示:
      */
     public ScheduledFuture<?> scheduleAtFixedRate(Runnable command,
                                                   long initialDelay,
                                                   long period,
                                                   TimeUnit unit) {
+    	//参数校验
         if (command == null || unit == null)
             throw new NullPointerException();
         if (period <= 0)
             throw new IllegalArgumentException();
+        //装饰任务注意 period=period>0 不是负数
         ScheduledFutureTask<Void> sft =
             new ScheduledFutureTask<Void>(command,
                                           null,
@@ -512,21 +575,40 @@ public class ScheduledThreadPoolExecutor
         sft.outerTask = t;
         delayedExecute(t);
         return t;
+        /*
+         * 如上代码中，在将五fixed-rate类型任务command转换为ScheduledFutureTask时设置period=period，
+         * 不再是-period。
+         * 所以当前任务执行完毕后，调用setNextRunTime设置任务下次执行的时间时执行的是time+p
+         * 而不再是time=triggerTime(-p）。
+         * 
+         * 总结：相对于fixed-delay任务来说，fixed-rate方式执行规则为，
+         * 时间为initdelday+n*period时启动任务，但是如果当前任务还没有执行完，下一次要执行任务的时间到了，
+         * 则不会并发执行，下次要执行的任务会延迟执行，要等到当前任务执行完毕后再执行。
+         */
     }
 
     /**
+     * <p>该方法的作用是，当任务执行完毕后，让其延迟固定时间后再次运行（fixeddelay任务）。
+     * <p>其中initialDelay表示提交任务后延迟多少时间开始执行任务command,
+     * delay示当任务执行完毕后延长多少时间后再次运行command任务，
+     * unit是initialDelay和delay的时间单位。任务会一直重复运行直到任务运行中抛出了异常，
+     * 被取消了，或者关闭了线程池。scheduleWithFixedDelay的代码如下。
+     * 
      * @throws RejectedExecutionException {@inheritDoc}
      * @throws NullPointerException       {@inheritDoc}
      * @throws IllegalArgumentException   {@inheritDoc}
+     * 
      */
     public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command,
                                                      long initialDelay,
                                                      long delay,
                                                      TimeUnit unit) {
+    	//14.参数校验
         if (command == null || unit == null)
             throw new NullPointerException();
         if (delay <= 0)
             throw new IllegalArgumentException();
+        //15 任务转换 period=-delay<0
         ScheduledFutureTask<Void> sft =
             new ScheduledFutureTask<Void>(command,
                                           null,
@@ -534,8 +616,19 @@ public class ScheduledThreadPoolExecutor
                                           unit.toNanos(-delay));
         RunnableScheduledFuture<Void> t = decorateTask(command, sft);
         sft.outerTask = t;
+        //16添加到任务队列
         delayedExecute(t);
         return t;
+        /*
+         *           代码(14）进行参数校验，校验失败则抛出异常，
+         *           代码(15）将command任务转换为ScheduledFutureTask。
+         *           这里需要注意的是，传递给ScheduledFutureTask的period变量的值为－delay,
+         *           period<0说明该任务为可重复执行的任务。
+         *           然后代码（16）添任务到延迟队列后返回。
+         *           将任务添加到延迟队列后线程池线程会从队列里面获取任务，
+         *           然后调用ScheduledFutureTask的run方法执行。由于这里period<O，
+         *           所以isPeriodic返回true，所以执行代码（11）。runAndReset的代码如下。
+         */
     }
 
     /**
@@ -1220,4 +1313,9 @@ public class ScheduledThreadPoolExecutor
             }
         }
     }
+    /*
+     *ScheduledThreadPoo!Executor的实现原理，其内部使用DelayQueue来存放具体任务。
+     *任务分为三种，其中一次性执行任务执行完毕就结束了，fixed-delay任务保证同个任务在多次执行之间间隔固定时间，
+     *fixed-rate任务保证按照固定的频率执行。任务类型使用period的值来区分。 
+     */
 }

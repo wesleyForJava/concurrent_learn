@@ -105,8 +105,15 @@ public class FutureTask<V> implements RunnableFuture<V> {
      * @throws NullPointerException if the runnable is null
      */
     public FutureTask(Runnable runnable, V result) {
+    	//通过适配器将runnable转换为callable
         this.callable = Executors.callable(runnable, result);
+        //设置当前任务状态为NEW
         this.state = NEW;       // ensure visibility of callable
+        /*
+         * FutureTask中的任务被转换为Callable类型后，
+	         * 被保存到了变量this.callable里面，并设置FutureTask的任务状态为NEW。
+	         * 然后在ScheduledFutureTask构造函数内部设置time上面说的绝对时间。
+         */
     }
 
     public boolean isCancelled() {
@@ -179,12 +186,19 @@ public class FutureTask<V> implements RunnableFuture<V> {
      *
      * <p>This method is invoked internally by the {@link #run} method
      * upon successful completion of the computation.
-     *
+     * <p>首先使用CAS将当前任务的状态从NEW转换到COMPLETING。
+     * <p>这里当有多个线程调用时只有一个线程会成功。
+     * <p>成功的线程再通过UNSAFE.putOrderedlnt设置任务的状态为正常结束状态，
+     * <p>这里没有使用CAS是因为对于同一个任务只可能有一个线程运行到这里。
+     * <p>在这里使用putOrderedlnt比使用CAS或者putLongvolatile效率要高，
+     * <p>并且这里的场景不要求其他线程马上对设置的状态值可见
      * @param v the value
      */
     protected void set(V v) {
+    	//如果当前任务的状态为NEW，则设置为COMPLETING
         if (UNSAFE.compareAndSwapInt(this, stateOffset, NEW, COMPLETING)) {
             outcome = v;
+            //设置当前任务的状态为NORMAL,也就是任务正常结束
             UNSAFE.putOrderedInt(this, stateOffset, NORMAL); // final state
             finishCompletion();
         }
@@ -201,18 +215,29 @@ public class FutureTask<V> implements RunnableFuture<V> {
      * @param t the cause of failure
      */
     protected void setException(Throwable t) {
+    	//如果当前任务的状态为NEW，则设置为COMPLETING
         if (UNSAFE.compareAndSwapInt(this, stateOffset, NEW, COMPLETING)) {
             outcome = t;
+          //设置当前任务的状态为EXCEPTIONAL,也就是任务正常结束
             UNSAFE.putOrderedInt(this, stateOffset, EXCEPTIONAL); // final state
             finishCompletion();
         }
     }
 
+    /**
+     *   <p> 代码（12）判断如果任务状态不是NEW则直接返回，
+     *   <p>或者如果当前任务状态为NEW但是使用CAS设置当前任务的持有者为当前线程失败则直接返回。
+     *   <p>代码（13〕具体调用callable的call方法执行任务。这里在调用前又判断了任务的状态是否为NEW，
+     *   <p>是为了避免在执行代码（12）后其线程修改了任务的状态（比如取消了该任务〉。
+     *   <p>如果任务执行成功则执行代码（l3.2）修改任务状态，set方法的代码如下：
+     */
     public void run() {
+    	//12
         if (state != NEW ||
             !UNSAFE.compareAndSwapObject(this, runnerOffset,
                                          null, Thread.currentThread()))
             return;
+        //13
         try {
             Callable<V> c = callable;
             if (c != null && state == NEW) {
@@ -224,8 +249,15 @@ public class FutureTask<V> implements RunnableFuture<V> {
                 } catch (Throwable ex) {
                     result = null;
                     ran = false;
+                   /**
+                    * <p>请思考个问题，在什么时候多个线程会同时执行CAS将当前任务的状态从NEW转换到COMPLETING？
+                    * <p>其实当同一个command被多次提交到线程池时就存在这样的情况，因为同一个任务共享一个状态值state。
+                    * <p>如果任务执行失败，则执行代码（l3.1）。setException的代码如下，可见与set函数类似
+                    */
+                  //13.1
                     setException(ex);
                 }
+                //13.2
                 if (ran)
                     set(result);
             }
@@ -247,14 +279,19 @@ public class FutureTask<V> implements RunnableFuture<V> {
      * computation encounters an exception or is cancelled.  This is
      * designed for use with tasks that intrinsically execute more
      * than once.
-     *
+     * 该代码和FutureTask的run方法类似，只是任务正常执行完毕后不会设置任务的状态，
+     * 这样做是为了让任务成为可重复执行的任务。这里多了代码(19)，
+     * 这段代码判断如果当前任务正常执行完毕并且任务状态为NEW则返回true，否则返回false。
+     * 如果返回了true则执代码（11.1）的setNextRunTime方法设置该任务下一次的执行时间。
      * @return {@code true} if successfully run and reset
      */
     protected boolean runAndReset() {
+    	//17
         if (state != NEW ||
             !UNSAFE.compareAndSwapObject(this, runnerOffset,
                                          null, Thread.currentThread()))
             return false;
+        //18
         boolean ran = false;
         int s = state;
         try {
@@ -277,7 +314,7 @@ public class FutureTask<V> implements RunnableFuture<V> {
             if (s >= INTERRUPTING)
                 handlePossibleCancellationInterrupt(s);
         }
-        return ran && s == NEW;
+        return ran && s == NEW; //19
     }
 
     /**
