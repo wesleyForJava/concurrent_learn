@@ -2,8 +2,8 @@ package com.concuurent.learn.juc;
 
 
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 
 /*
@@ -19,39 +19,39 @@ import java.util.concurrent.locks.ReadWriteLock;
  * 当释放该锁时需要调用unlockWrite方法并传递获取锁时的stamp参数。并且它提供了非阻塞的tryWriteLock方法。
  * <br />
  *·悲观读锁readLock：
-*   是一个共享锁，在没有线程获取独占写锁的情况下，多个线程可以同时获取该锁。
-*   如果己经有线程持有写锁，则其他线程请求获取该读锁会被阻塞，
-*   这类似于ReentrantReadWriteLock的读锁（不同的是这里的读锁是不可重入锁〉。
-*   这里说的悲观是指在具体操作数据前其会悲观地认为其他线程可能要对自己操作的数据进行修改，
-*   所以需要先对数据加锁，这是在读少写多的情况下的一种考虑请求该锁成功后会返回一个stamp变量用来表示该锁的版本，
-*   当释放该锁时需要调用unlockRead法并传递stamp参数。并且它提供了非阻塞的tryReadLock方法。
-*  <br />
-*·乐观读锁tryOptimisticRead：
-*它是相对于悲观锁来说的，在操作数据前并没有通过CAS设置锁的状态，仅仅通过位运算测试。
-*如果当前没有线程持有写锁，则简单地返回一个非0的stamp版本信息。
-*获取该tamp后在具体操作数据前还需要调用validate方法验证该stamp是否己经不可用，
-*也就是看当调用trγOptimisticRead返回stamp后到当前时间期间是有其他线程持有了写锁，
-*如果是则validate会返回o,否则就可以使用该stamp版本的锁对数据进行操作。
-*由于tryOptimisticRead并没有使用CAS设置锁状态，所以不需要显式地释放该锁。
-*锁的一个特点是适用于读多写少的场景，因为获取读锁只是使用位操作进行检验，
-*不涉及CAS操作，所以效率会高很多，但是同时由于没有使用真正的锁，
-*在保证数据一致性上需要复制一份要操作的量到方法栈，
-*并且在操作数据时可能其他写线程己经修改了数据，而我们操作的是方法栈里面的数据，
-*也就是一个快照，所以最多返回的不是最新的数据，但是一致性还是得到保障的。
-* <br />
-*StampedLock还支持这三种锁在－定条件下进行相互转换。
-*例如longtryConvertToWriteLock(long stamp）期望把stamp标示的锁升级为写锁，
-*这个函数会在下面种情况下返回一个有效的stamp（也就是晋升写锁成功）：
-*		·当前己经是写锁模式了。
-*		·当前锁处于读锁模式，并且没有其他线程是读锁模式
-*		·当前处于乐观读模式，井且当前写锁可用。
-*  <br />
-*		另外，StampedLock的读写锁都是不可重入锁，
-*            所以在获取锁后释放锁前不应该再调用会获取锁的操作，
-*            以避免造成调用线程被阻塞。当多个线程同时尝试获取读锁和写锁时，
-*            谁先获取锁没有一定的规则，完全都尽力而为，是随机的。
-*            并且该锁不是直接实现Lock或ReadWriteLock接口，
-*            而是其在内部自己维护了一个双阻塞队列。
+ *   是一个共享锁，在没有线程获取独占写锁的情况下，多个线程可以同时获取该锁。
+ *   如果己经有线程持有写锁，则其他线程请求获取该读锁会被阻塞，
+ *   这类似于ReentrantReadWriteLock的读锁（不同的是这里的读锁是不可重入锁〉。
+ *   这里说的悲观是指在具体操作数据前其会悲观地认为其他线程可能要对自己操作的数据进行修改，
+ *   所以需要先对数据加锁，这是在读少写多的情况下的一种考虑请求该锁成功后会返回一个stamp变量用来表示该锁的版本，
+ *   当释放该锁时需要调用unlockRead法并传递stamp参数。并且它提供了非阻塞的tryReadLock方法。
+ *  <br />
+ *·乐观读锁tryOptimisticRead：
+ *它是相对于悲观锁来说的，在操作数据前并没有通过CAS设置锁的状态，仅仅通过位运算测试。
+ *如果当前没有线程持有写锁，则简单地返回一个非0的stamp版本信息。
+ *获取该tamp后在具体操作数据前还需要调用validate方法验证该stamp是否己经不可用，
+ *也就是看当调用trγOptimisticRead返回stamp后到当前时间期间是有其他线程持有了写锁，
+ *如果是则validate会返回o,否则就可以使用该stamp版本的锁对数据进行操作。
+ *由于tryOptimisticRead并没有使用CAS设置锁状态，所以不需要显式地释放该锁。
+ *锁的一个特点是适用于读多写少的场景，因为获取读锁只是使用位操作进行检验，
+ *不涉及CAS操作，所以效率会高很多，但是同时由于没有使用真正的锁，
+ *在保证数据一致性上需要复制一份要操作的量到方法栈，
+ *并且在操作数据时可能其他写线程己经修改了数据，而我们操作的是方法栈里面的数据，
+ *也就是一个快照，所以最多返回的不是最新的数据，但是一致性还是得到保障的。
+ * <br />
+ *StampedLock还支持这三种锁在－定条件下进行相互转换。
+ *例如longtryConvertToWriteLock(long stamp）期望把stamp标示的锁升级为写锁，
+ *这个函数会在下面种情况下返回一个有效的stamp（也就是晋升写锁成功）：
+ *		·当前己经是写锁模式了。
+ *		·当前锁处于读锁模式，并且没有其他线程是读锁模式
+ *		·当前处于乐观读模式，井且当前写锁可用。
+ *  <br />
+ *		另外，StampedLock的读写锁都是不可重入锁，
+ *            所以在获取锁后释放锁前不应该再调用会获取锁的操作，
+ *            以避免造成调用线程被阻塞。当多个线程同时尝试获取读锁和写锁时，
+ *            谁先获取锁没有一定的规则，完全都尽力而为，是随机的。
+ *            并且该锁不是直接实现Lock或ReadWriteLock接口，
+ *            而是其在内部自己维护了一个双阻塞队列。
  * @since 1.8
  * @author Doug Lea
  */
@@ -137,7 +137,8 @@ public class StampedLock implements java.io.Serializable {
      *
      * @return a stamp that can be used to unlock or convert mode
      */
-    public long writeLock() {
+    @SuppressWarnings("restriction")
+	public long writeLock() {
         long s, next;  // bypass acquireWrite in fully unlocked case only
         return ((((s = state) & ABITS) == 0L &&
                  U.compareAndSwapLong(this, STATE, s, next = s + WBIT)) ?
@@ -545,7 +546,8 @@ public class StampedLock implements java.io.Serializable {
      *
      * @return {@code true} if the read lock was held, else false
      */
-    public boolean tryUnlockRead() {
+    @SuppressWarnings("restriction")
+	public boolean tryUnlockRead() {
         long s, m; WNode h;
         while ((m = (s = state) & ABITS) != 0L && m < WBIT) {
             if (m < RFULL) {
@@ -751,7 +753,8 @@ public class StampedLock implements java.io.Serializable {
      * @param s a reader overflow stamp: (s & ABITS) >= RFULL
      * @return new stamp on success, else zero
      */
-    private long tryIncReaderOverflow(long s) {
+    @SuppressWarnings("restriction")
+	private long tryIncReaderOverflow(long s) {
         // assert (s & ABITS) >= RFULL;
         if ((s & ABITS) == RFULL) {
             if (U.compareAndSwapLong(this, STATE, s, s | RBITS)) {

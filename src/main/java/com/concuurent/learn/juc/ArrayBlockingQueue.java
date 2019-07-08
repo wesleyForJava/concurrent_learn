@@ -126,8 +126,8 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
     * 最后发送信号激活notFull的条件队列里面一个因为调用put方法而被阻塞的线程。
     */
    private E dequeue() {
-       // assert lock.getHoldCount() == 1;
-       // assert items[takeIndex] != null;
+        assert lock.getHoldCount() == 1;
+        assert items[takeIndex] != null;
        final Object[] items = this.items;
        //获取元素值
        @SuppressWarnings("unchecked")
