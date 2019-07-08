@@ -104,8 +104,8 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
     * 加过锁后获取的共享变量都是从主内存获取的，而不是从CPU缓存或者寄存器获取。<br>
     */
    private void enqueue(E x) {
-       // assert lock.getHoldCount() == 1;
-       // assert items[putIndex] == null;
+        assert lock.getHoldCount() == 1;
+       assert items[putIndex] == null;
 	   //6.元素入队
        final Object[] items = this.items;
        items[putIndex] = x;
