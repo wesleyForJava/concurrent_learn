@@ -104,8 +104,8 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
     * 加过锁后获取的共享变量都是从主内存获取的，而不是从CPU缓存或者寄存器获取。<br>
     */
    private void enqueue(E x) {
-       // assert lock.getHoldCount() == 1;
-       // assert items[putIndex] == null;
+        assert lock.getHoldCount() == 1;
+       assert items[putIndex] == null;
 	   //6.元素入队
        final Object[] items = this.items;
        items[putIndex] = x;
@@ -126,8 +126,8 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
     * 最后发送信号激活notFull的条件队列里面一个因为调用put方法而被阻塞的线程。
     */
    private E dequeue() {
-       // assert lock.getHoldCount() == 1;
-       // assert items[takeIndex] != null;
+        assert lock.getHoldCount() == 1;
+        assert items[takeIndex] != null;
        final Object[] items = this.items;
        //获取元素值
        @SuppressWarnings("unchecked")
